@@ -118,15 +118,15 @@ def objective(trial):
     lgb_params = {
         "objective": "binary",
         "boosting_type": "gbdt",
-        "n_estimators": trial.suggest_int("n_estimators", 50, 400),
-        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True),
-        "lambda_l1": trial.suggest_loguniform("lambda_l1", 1e-8, 10.0),
-        "lambda_l2": trial.suggest_loguniform("lambda_l2", 1e-8, 10.0),
-        "num_leaves": trial.suggest_int("num_leaves", 2, 256),
-        "feature_fraction": trial.suggest_uniform("feature_fraction", 0.4, 1.0),
-        "bagging_fraction": trial.suggest_uniform("bagging_fraction", 0.4, 1.0),
-        "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
-        "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+        "n_estimators": trial.suggest_int("n_estimators", 350, 550),
+        "learning_rate": trial.suggest_float("learning_rate", 7e-3, 1e-1, log=True),
+        "lambda_l1": trial.suggest_loguniform("lambda_l1", 1e-4, 2.0),
+        "lambda_l2": trial.suggest_loguniform("lambda_l2", 7.0, 10.0),
+        "num_leaves": trial.suggest_int("num_leaves", 60, 120),
+        "feature_fraction": trial.suggest_uniform("feature_fraction", 0.4, 0.55),
+        "bagging_fraction": trial.suggest_uniform("bagging_fraction", 0.85, 1.0),
+        "bagging_freq": trial.suggest_int("bagging_freq", 6, 9),
+        "min_child_samples": trial.suggest_int("min_child_samples", 65, 80),
         "device": "gpu",
         "verbosity": -1,
     }
@@ -153,7 +153,7 @@ def objective(trial):
     return score
 
 study = optuna.create_study(direction='maximize')
-study.optimize(objective, n_trials=200)
- 
+study.optimize(objective, n_trials=500)
+
 print('Number of finished trials:', len(study.trials))
 print('Best trial:', study.best_trial.params)
