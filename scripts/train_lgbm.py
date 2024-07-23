@@ -30,7 +30,7 @@ def feature_engineering(df):
     df["combined_anatomical_site"] = df["anatom_site_general"] + "_" + df["tbp_lv_location"]
     df["symmetry_border_consistency"] = df["tbp_lv_symm_2axis"] * df["tbp_lv_norm_border"]
     df["color_consistency"] = df["tbp_lv_stdL"] / df["tbp_lv_Lext"]
-    
+
     df["size_age_interaction"] = df["clin_size_long_diam_mm"] * df["age_approx"]
     df["hue_color_std_interaction"] = df["tbp_lv_H"] * df["tbp_lv_color_std_mean"]
     df["lesion_severity_index"] = (df["tbp_lv_norm_border"] + df["tbp_lv_norm_color"] + df["tbp_lv_eccentricity"]) / 3
@@ -133,15 +133,15 @@ lgb_params =  {
     "objective": "binary",
     "verbosity": -1,
     "boosting_type": "gbdt",
-    "n_estimators": 200,
-    'learning_rate': 0.05,    
-    'lambda_l1': 0.0004681884533249742, 
-    'lambda_l2': 8.765240856362274, 
-    'num_leaves': 136, 
-    'feature_fraction': 0.5392005444882538, 
-    'bagging_fraction': 0.9577412548866563, 
-    'bagging_freq': 6,
-    'min_child_samples': 60,
+    "n_estimators": 531, # 200,
+    'learning_rate': 0.020961882958412847, # 0.05,    
+    'lambda_l1': 0.031850406238810657, #0.0004681884533249742, 
+    'lambda_l2': 9.352820586794987, # 8.765240856362274, 
+    'num_leaves': 60, # 136, 
+    'feature_fraction': 0.5270436775267011, # 0.5392005444882538, 
+    'bagging_fraction': 0.9745808187865352, # 0.9577412548866563, 
+    'bagging_freq': 9, # 6,
+    'min_child_samples': 65, # 60,
     "device": "gpu"
 }
 
@@ -155,7 +155,7 @@ for fold in range(5):
     model = lgb.LGBMRegressor(
         **lgb_params
     )
-    model.fit(_df_train[train_cols], _df_train["target"], callbacks=[wandb_callback()])
+    model.fit(_df_train[train_cols], _df_train["target"])
     preds = model.predict(_df_valid[train_cols])
     score = comp_score(_df_valid[["target"]], pd.DataFrame(preds, columns=["prediction"]), "")
     print(f"fold: {fold} - Partial AUC Score: {score:.5f}")
@@ -167,8 +167,11 @@ for fold in range(5):
     models.append(model)
 
 score = np.mean(scores)
+score_std = np.std(scores)
 print(f"LGBM Score: {score:.5f}")
+print(f"LGBM Score std: {score_std:.5f}")
 wandb.log({"pAUC": score})
+wandb.log({"pAUC std": score_std})
 
 # ## Plot pAUC
 # tpr_threshold = 0.8
