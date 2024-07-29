@@ -2,7 +2,10 @@ import os
 print(os.cpu_count())
 
 import copy
+import math
 import wandb
+wandb.require("core")
+
 import random
 import pandas as pd
 import numpy as np
@@ -93,7 +96,7 @@ class SkinDataset(Dataset):
 
 # simple resize and normalize
 transforms_train = A.Compose([
-    A.Resize(224, 224),
+    A.Resize(124, 124),
     A.Normalize(
         # mean=(0.6962, 0.5209, 0.4193),
         # std=(0.1395, 0.1320, 0.1240)
@@ -102,7 +105,7 @@ transforms_train = A.Compose([
 ])
 
 transforms_valid = A.Compose([
-    A.Resize(224, 224),
+    A.Resize(124, 124),
     A.Normalize(
         # mean=(0.6962, 0.5209, 0.4193),
         # std=(0.1395, 0.1320, 0.1240)
@@ -111,7 +114,11 @@ transforms_valid = A.Compose([
 ])
 
 # dataloaders
-train_df = train_metadata_df.loc[train_metadata_df.fold == 0] # using a subset for training
+# using 2 folds as training and 1 fold as validation
+train_df_1 = train_metadata_df.loc[train_metadata_df.fold == 0] # using a subset for training
+train_df_2 = train_metadata_df.loc[train_metadata_df.fold == 2] # using a subset for training
+train_df_3 = train_metadata_df.loc[train_metadata_df.fold == 3] # using a subset for training
+train_df = pd.concat([train_df_1, train_df_2, train_df_3])
 valid_df = train_metadata_df.loc[train_metadata_df.fold == 1] # using another fold for validation
 
 num_workers = 24 # based on profiling
@@ -124,6 +131,13 @@ valid_dataloader = DataLoader(valid_dataset, batch_size=128, shuffle=False, num_
 
 dataset_sizes = {"train": len(train_dataset), "val": len(valid_dataset)}
 print(dataset_sizes)
+
+# calculate bias value
+neg_samples = len(train_dataset.get_class_samples(0))
+pos_samples = len(train_dataset.get_class_samples(1))
+p_positive = pos_samples / (neg_samples + pos_samples)
+bias_value = math.log(p_positive / (1 - p_positive))
+print(f"Calculated bias value: {bias_value}")
 
 
 # training and validation utils
@@ -197,7 +211,7 @@ def validate_model(model, dataloader, criterions, optimizer, valid_step):
 
 # model
 class SkinClassifier(nn.Module):
-    def __init__(self, model_name='resnet18', freeze_backbone=False):
+    def __init__(self, model_name='resnet18', freeze_backbone=False, bias_value=None):
         super(SkinClassifier, self).__init__()
         
         # Load the specified pre-trained model
@@ -206,25 +220,25 @@ class SkinClassifier(nn.Module):
             if freeze_backbone:
                 self.freeze_backbone()
             num_ftrs = self.backbone.fc.in_features
-            self.backbone.fc = self.get_clf_head(num_ftrs, 1)
+            self.backbone.fc = self.get_clf_head(num_ftrs, 1, bias_value)
         elif model_name == 'convnext_tiny':
             self.backbone = models.convnext_tiny(weights="IMAGENET1K_V1")
             if freeze_backbone:
                 self.freeze_backbone()
             num_ftrs = self.backbone.classifier[2].in_features
-            self.backbone.classifier[2] = self.get_clf_head(num_ftrs, 1)
+            self.backbone.classifier[2] = self.get_clf_head(num_ftrs, 1, bias_value)
         elif model_name == "efficientnet_v2_s":
             self.backbone = models.efficientnet_v2_s(weights="IMAGENET1K_V1")
             if freeze_backbone:
                 self.freeze_backbone()
             num_ftrs = self.backbone.classifier[1].in_features
-            self.backbone.classifier[1] = self.get_clf_head(num_ftrs, 1)
+            self.backbone.classifier[1] = self.get_clf_head(num_ftrs, 1, bias_value)
         elif model_name == "mobilenet_v3_small":
             self.backbone = models.mobilenet_v3_small(weights="IMAGENET1K_V1")
             if freeze_backbone:
                 self.freeze_backbone()
             num_ftrs = self.backbone.classifier[3].in_features
-            self.backbone.classifier[3] = self.get_clf_head(num_ftrs, 1)
+            self.backbone.classifier[3] = self.get_clf_head(num_ftrs, 1, bias_value)
         else:
             raise ValueError(f"Model {model_name} not supported")        
 
@@ -235,8 +249,10 @@ class SkinClassifier(nn.Module):
         for param in self.backbone.parameters():
             param.requires_grad = False
 
-    def get_clf_head(self, in_features, out_features, bias=None):
-        return nn.Linear(in_features, out_features)
+    def get_clf_head(self, in_features, out_features, bias_value=None):
+        head = nn.Linear(in_features, out_features)
+        nn.init.constant_(head.bias, bias_value)
+        return head
 
     def count_parameters(self):
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -244,7 +260,7 @@ class SkinClassifier(nn.Module):
         return trainable_params, non_trainable_params
 
 # Create the model
-model = SkinClassifier(model_name='efficientnet_v2_s', freeze_backbone=True)
+model = SkinClassifier(model_name='efficientnet_v2_s', freeze_backbone=True, bias_value=bias_value)
 model = model.to(device)
 model = torch.compile(model)
 print(model)
@@ -278,7 +294,7 @@ best_valid_loss = np.inf
 early_stopping_patience = 4
 epochs_no_improve = 0
 
-for epoch in range(40):
+for epoch in range(15): # reducing epoch to 15 because quick overfitting after correct init
     model_ft, epoch_loss, epoch_train_auroc = train_model(
         model, train_dataloader, criterion, optimizer, train_step,
     )
