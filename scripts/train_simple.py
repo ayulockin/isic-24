@@ -58,6 +58,7 @@ def set_seed(seed):
 # Set the random seed
 set_seed(42)
 
+
 # Data
 def add_path(row):
     return f"../data/train-image/image/{row.isic_id}.jpg"
@@ -96,20 +97,30 @@ class SkinDataset(Dataset):
 
 # simple resize and normalize
 transforms_train = A.Compose([
-    A.Resize(124, 124),
-    A.Normalize(
-        # mean=(0.6962, 0.5209, 0.4193),
-        # std=(0.1395, 0.1320, 0.1240)
+    A.Resize(224, 224),
+    A.CenterCrop(
+        height=124,
+        width=124,
+        p=1.0,
     ),
+    A.ShiftScaleRotate(
+        shift_limit=0.1, scale_limit=0.15, rotate_limit=60, p=0.5
+    ),
+    A.HueSaturationValue(
+        hue_shift_limit=0.2, sat_shift_limit=0.2, val_shift_limit=0.2, p=0.5
+    ),
+    A.RandomBrightnessContrast(
+        brightness_limit=(-0.1, 0.1), contrast_limit=(-0.1, 0.1), p=0.5
+    ),
+    A.RandomRotate90(p=0.5),
+    A.Flip(p=0.5),
+    A.Normalize(),
     ToTensorV2(),
 ])
 
 transforms_valid = A.Compose([
     A.Resize(124, 124),
-    A.Normalize(
-        # mean=(0.6962, 0.5209, 0.4193),
-        # std=(0.1395, 0.1320, 0.1240)
-    ),
+    A.Normalize(),
     ToTensorV2(),
 ])
 
@@ -138,6 +149,11 @@ pos_samples = len(train_dataset.get_class_samples(1))
 p_positive = pos_samples / (neg_samples + pos_samples)
 bias_value = math.log(p_positive / (1 - p_positive))
 print(f"Calculated bias value: {bias_value}")
+
+# calculate class weight
+pos_weight = torch.ones([1]) * (neg_samples / pos_samples)
+pos_weight = pos_weight.to(device)
+print(f"Calculated pos_weight: {pos_weight}")
 
 
 # training and validation utils
@@ -233,6 +249,12 @@ class SkinClassifier(nn.Module):
                 self.freeze_backbone()
             num_ftrs = self.backbone.classifier[1].in_features
             self.backbone.classifier[1] = self.get_clf_head(num_ftrs, 1, bias_value)
+        elif model_name == "efficientnet_v2_m":
+            self.backbone = models.efficientnet_v2_m(weights="IMAGENET1K_V1")
+            if freeze_backbone:
+                self.freeze_backbone()
+            num_ftrs = self.backbone.classifier[1].in_features
+            self.backbone.classifier[1] = self.get_clf_head(num_ftrs, 1, bias_value)
         elif model_name == "mobilenet_v3_small":
             self.backbone = models.mobilenet_v3_small(weights="IMAGENET1K_V1")
             if freeze_backbone:
@@ -270,7 +292,7 @@ print(f"Trainable parameters: {trainable_params}")
 print(f"Non-trainable parameters: {non_trainable_params}")
 
 # Loss fn and optimizer
-criterion = nn.BCEWithLogitsLoss()
+criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 optimizer = optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()),
     lr=0.001,
