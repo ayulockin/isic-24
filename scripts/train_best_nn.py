@@ -15,8 +15,6 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 import torch
-import torch.nn.functional as F
-import torchvision
 from torchvision.io import read_image
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import WeightedRandomSampler
@@ -126,15 +124,15 @@ transforms_train = A.Compose(
         A.CLAHE(
             clip_limit=4, tile_grid_size=(10, 10), p=0.5
         ),
-        A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.15, rotate_limit=60, p=0.5),
+        A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.3, rotate_limit=60, p=0.6),
         A.HueSaturationValue(
             hue_shift_limit=0.2, sat_shift_limit=0.2, val_shift_limit=0.2, p=0.5
         ),
         A.RandomBrightnessContrast(
             brightness_limit=(-0.1, 0.1), contrast_limit=(-0.1, 0.1), p=0.5
         ),
-        A.RandomRotate90(p=0.5),
-        A.Flip(p=0.5),
+        A.RandomRotate90(p=0.6),
+        A.Flip(p=0.7),
         A.Normalize(),
         ToTensorV2(),
     ]
@@ -175,11 +173,6 @@ print(f"Calculated bias value: {bias_value}")
 pos_weight = torch.ones([1]) * (neg_samples / pos_samples)
 pos_weight = pos_weight.to(device)
 print(f"Calculated pos_weight: {pos_weight}")
-
-# calculate alpha for focal loss
-alpha = torch.ones([1]) * (pos_samples / neg_samples)
-alpha = alpha.to(device)
-print(f"Calculated alpha: {alpha}")
 
 # calculate weight for each class for random sampler
 neg_wts = 1 / neg_samples
@@ -297,26 +290,8 @@ def validate_model(model, dataloader, criterion, optimizer, valid_step):
 
 
 # model
-class GeM(nn.Module):
-    def __init__(self, p=3, eps=1e-6):
-        super(GeM, self).__init__()
-        self.p = nn.Parameter(torch.ones(1)*p)
-        self.eps = eps
-
-    def forward(self, x):
-        return self.gem(x, p=self.p, eps=self.eps)
-        
-    def gem(self, x, p=3, eps=1e-6):
-        return F.avg_pool2d(x.clamp(min=eps).pow(p), (x.size(-2), x.size(-1))).pow(1./p)
-        
-    def __repr__(self):
-        return self.__class__.__name__ + \
-                '(' + 'p=' + '{:.4f}'.format(self.p.data.tolist()[0]) + \
-                ', ' + 'eps=' + str(self.eps) + ')'
-
-
 class SkinClassifier(nn.Module):
-    def __init__(self, model_name="resnet18", freeze_backbone=False, bias_value=None, gem_pooling=False):
+    def __init__(self, model_name="resnet18", freeze_backbone=False, bias_value=None):
         super(SkinClassifier, self).__init__()
 
         # Load the specified pre-trained model
@@ -336,8 +311,6 @@ class SkinClassifier(nn.Module):
             self.backbone = models.efficientnet_v2_s(weights="IMAGENET1K_V1")
             if freeze_backbone:
                 self.freeze_backbone()
-            if gem_pooling:
-                self.backbone.avgpool = GeM()
             num_ftrs = self.backbone.classifier[1].in_features
             self.backbone.classifier[1] = self.get_clf_head(num_ftrs, 1, bias_value)
         elif model_name == "efficientnet_v2_m":
@@ -385,7 +358,7 @@ class SkinClassifier(nn.Module):
 
 # Create the model
 model = SkinClassifier(
-    model_name="efficientnet_v2_s", freeze_backbone=True, bias_value=bias_value, gem_pooling=True
+    model_name="efficientnet_v2_s", freeze_backbone=True, bias_value=bias_value
 )
 model = model.to(device)
 model = torch.compile(model)
@@ -396,12 +369,7 @@ print(f"Trainable parameters: {trainable_params}")
 print(f"Non-trainable parameters: {non_trainable_params}")
 
 # Loss fn and optimizer
-# criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-def criterion(preds, gts):
-    return torchvision.ops.sigmoid_focal_loss(
-        preds, gts, alpha=alpha, reduction="mean"
-    )
-
+criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 optimizer = optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()), lr=0.001, weight_decay=1e-6
 )
@@ -429,7 +397,7 @@ early_stopping_patience = 4
 epochs_no_improve = 0
 
 for epoch in range(
-    30
+    50
 ):  # reducing epoch to 15 because quick overfitting after correct init
     model_ft, epoch_loss, epoch_train_auroc = train_model(
         model,
@@ -437,6 +405,7 @@ for epoch in range(
         criterion,
         optimizer,
         train_step,
+        scheduler,
     )
 
     model_ft, valid_loss, epoch_valid_auroc = validate_model(
