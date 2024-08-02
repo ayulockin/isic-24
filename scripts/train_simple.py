@@ -115,7 +115,7 @@ class SkinDataset(Dataset):
 # simple resize and normalize
 transforms_train = A.Compose(
     [
-        A.Resize(224, 224),
+        A.Resize(124, 124),
         A.CenterCrop(
             height=124,
             width=124,
@@ -151,25 +151,14 @@ train_df_1 = train_metadata_df.loc[train_metadata_df.fold == 0]
 train_df_2 = train_metadata_df.loc[train_metadata_df.fold == 2]
 train_df_3 = train_metadata_df.loc[train_metadata_df.fold == 3]
 train_df_4 = train_metadata_df.loc[train_metadata_df.fold == 4]
-train_df = pd.concat([train_df_1, train_df_2, train_df_3])
+train_df = pd.concat([train_df_1, train_df_2, train_df_3, train_df_4])
 
 valid_df = train_metadata_df.loc[train_metadata_df.fold == 1]
 
 num_workers = 24  # based on profiling
 
 train_dataset = SkinDataset(train_df, transform=transforms_train)
-# train_dataloader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=num_workers, pin_memory=True, persistent_workers=True, drop_last=True)
-
 valid_dataset = SkinDataset(valid_df, transform=transforms_valid)
-valid_dataloader = DataLoader(
-    valid_dataset,
-    batch_size=128,
-    shuffle=False,
-    num_workers=num_workers,
-    pin_memory=True,
-    persistent_workers=True,
-)
-
 dataset_sizes = {"train": len(train_dataset), "val": len(valid_dataset)}
 print(dataset_sizes)
 
@@ -197,7 +186,7 @@ for label in train_dataset.labels:
         sample_wts.append(pos_wts)
 
 sampler = WeightedRandomSampler(
-    weights=sample_wts, num_samples=len(train_dataset), replacement=True
+    weights=sample_wts, num_samples=int(len(train_dataset)/4), replacement=True
 )
 train_dataloader = DataLoader(
     train_dataset,
@@ -209,10 +198,19 @@ train_dataloader = DataLoader(
     drop_last=True,
 )
 
+valid_dataloader = DataLoader(
+    valid_dataset,
+    batch_size=128,
+    shuffle=False,
+    num_workers=num_workers,
+    pin_memory=True,
+    persistent_workers=True,
+)
+
 
 # training and validation utils
 def train_model(model, dataloader, criterion, optimizer, train_step, scheduler=None):
-    model.train()  # Set model to training mode
+    model.train()
 
     running_loss = 0.0
     running_auroc = 0.0
@@ -238,9 +236,17 @@ def train_model(model, dataloader, criterion, optimizer, train_step, scheduler=N
         if (idx + 1) % 10 == 0:
             train_step += 1
             wandb.log(
-                {"train_loss": loss_val, "train_auroc": auroc, "train_step": train_step}
+                {
+                    "train_loss": loss_val,
+                    "train_auroc": auroc,
+                    "train_step": train_step,
+                    "lr": optimizer.param_groups[0]["lr"]
+                }
             )
             print(f"Train Batch Loss: {loss_val} | Train AUROC: {auroc}")
+
+        if scheduler:
+            scheduler.step()
 
     epoch_loss = running_loss / dataset_sizes["train"]
     epoch_auroc = running_auroc / dataset_sizes["train"]
@@ -248,7 +254,7 @@ def train_model(model, dataloader, criterion, optimizer, train_step, scheduler=N
     return model, epoch_loss, epoch_auroc
 
 
-def validate_model(model, dataloader, criterions, optimizer, valid_step):
+def validate_model(model, dataloader, criterion, optimizer, valid_step):
     model.eval()
 
     running_loss = 0.0
@@ -329,9 +335,17 @@ class SkinClassifier(nn.Module):
         for param in self.backbone.parameters():
             param.requires_grad = False
 
+        # unfreeze last conv block
+        for param in self.backbone.features[6].parameters():
+            param.requires_grad = True
+
+        for param in self.backbone.features[7].parameters():
+            param.requires_grad = True
+
     def get_clf_head(self, in_features, out_features, bias_value=None):
         head = nn.Linear(in_features, out_features)
-        nn.init.constant_(head.bias, bias_value)
+        if bias_value:
+            nn.init.constant_(head.bias, bias_value)
         return head
 
     def count_parameters(self):
@@ -359,6 +373,13 @@ criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 optimizer = optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()), lr=0.001, weight_decay=1e-6
 )
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optimizer,
+    T_0=626,
+    T_mult=2,
+    eta_min=1e-6,
+    last_epoch=-1
+)
 
 # train loop
 model_name = "efficientnet_v2_s"
@@ -384,6 +405,7 @@ for epoch in range(
         criterion,
         optimizer,
         train_step,
+        scheduler,
     )
 
     model_ft, valid_loss, epoch_valid_auroc = validate_model(
