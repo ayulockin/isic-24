@@ -331,10 +331,6 @@ class SkinClassifier(nn.Module):
         for param in self.backbone.parameters():
             param.requires_grad = False
 
-        # unfreeze last conv block
-        for param in self.backbone.features[5].parameters():
-            param.requires_grad = True
-
         for param in self.backbone.features[6].parameters():
             param.requires_grad = True
 
@@ -369,12 +365,12 @@ print(f"Non-trainable parameters: {non_trainable_params}")
 
 # Loss fn and optimizer
 criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-optimizer = optim.Adam(
-    filter(lambda p: p.requires_grad, model.parameters()), lr=0.001, weight_decay=1e-6
+optimizer = optim.AdamW(
+    filter(lambda p: p.requires_grad, model.parameters()), lr=0.001, weight_decay=1e-5
 )
 scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
     optimizer,
-    T_0=626,
+    T_0=626*2,
     T_mult=2,
     eta_min=1e-6,
     last_epoch=-1
@@ -396,7 +392,7 @@ early_stopping_patience = 4
 epochs_no_improve = 0
 
 for epoch in range(
-    50
+    62
 ):  # reducing epoch to 15 because quick overfitting after correct init
     model_ft, epoch_loss, epoch_train_auroc = train_model(
         model,
