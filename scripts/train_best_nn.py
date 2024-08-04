@@ -14,6 +14,10 @@ import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+import h5py
+from PIL import Image
+from io import BytesIO
+
 import torch
 from torchvision.io import read_image
 from torch.utils.data import Dataset, DataLoader
@@ -69,42 +73,33 @@ run = wandb.init(project="isic_lesions_24", job_type="pretrain")
 def add_path(row):
     return f"../data/train-image/image/{row.isic_id}.jpg"
 
-
-def add_extra_path(row):
-    return f"../data/extra/malignant_images/{row.isic_id}.jpg"
-
 train_metadata_df = pd.read_csv("../data/stratified_5_fold_train_metadata.csv")
-extra_malignant_df = pd.read_csv("../data/extra_malignant.csv")
 train_metadata_df["path"] = train_metadata_df.apply(lambda row: add_path(row), axis=1)
-extra_malignant_df["path"] = extra_malignant_df.apply(lambda row: add_extra_path(row), axis=1)
-print(f"Train: {len(train_metadata_df)} | Extra train: {len(extra_malignant_df)}")
+print(f"Train: {len(train_metadata_df)}")
 
-train_metadata_df = train_metadata_df[["path", "target", "fold"]]
-extra_malignant_df = extra_malignant_df[["path", "target", "fold"]]
+train_metadata_df = train_metadata_df[["isic_id", "target", "fold"]]
 
 
 # dataset
 class SkinDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, transform=None, target_transform=None):
-        assert "path" in df.columns
+    def __init__(self, df: pd.DataFrame, file_hdf: str, transform=None):
+        assert "isic_id" in df.columns
         assert "target" in df.columns
 
-        self.paths = df.path.tolist()
-        self.labels = df.target.tolist()  # binary
+        self.fp_hdf = h5py.File(file_hdf, mode="r")
+        self.isic_ids = df['isic_id'].values
+        self.labels = df.target.tolist()
         self.transform = transform
-        self.target_transform = target_transform
 
     def __len__(self):
-        return len(self.paths)
+        return len(self.isic_ids)
 
     def __getitem__(self, idx: int):
-        image = read_image(self.paths[idx]).to(torch.uint8)
+        isic_id = self.isic_ids[idx]
+        image = np.array(Image.open(BytesIO(self.fp_hdf[isic_id][()])))
         label = self.labels[idx] / 1.0
         if self.transform:
-            image = image.numpy().transpose((1, 2, 0))
             image = self.transform(image=image)["image"]
-        if self.target_transform:
-            label = self.target_transform(label)
         return image, label
 
     def get_class_samples(self, class_label):
@@ -115,10 +110,10 @@ class SkinDataset(Dataset):
 # simple resize and normalize
 transforms_train = A.Compose(
     [
-        A.Resize(124, 124),
+        A.Resize(224, 224),
         A.CenterCrop(
-            height=124,
-            width=124,
+            height=224,
+            width=224,
             p=1.0,
         ),
         A.CLAHE(
@@ -140,7 +135,7 @@ transforms_train = A.Compose(
 
 transforms_valid = A.Compose(
     [
-        A.Resize(124, 124),
+        A.Resize(224, 224),
         A.Normalize(),
         ToTensorV2(),
     ]
@@ -157,8 +152,9 @@ valid_df = train_metadata_df.loc[train_metadata_df.fold == 1]
 
 num_workers = 24  # based on profiling
 
-train_dataset = SkinDataset(train_df, transform=transforms_train)
-valid_dataset = SkinDataset(valid_df, transform=transforms_valid)
+file_hdf = "/home/ubuntu/ayusht/skin/data/train-image.hdf5"
+train_dataset = SkinDataset(train_df, file_hdf, transform=transforms_train)
+valid_dataset = SkinDataset(valid_df, file_hdf, transform=transforms_valid)
 dataset_sizes = {"train": len(train_dataset), "val": len(valid_dataset)}
 print(dataset_sizes)
 
@@ -336,6 +332,9 @@ class SkinClassifier(nn.Module):
             param.requires_grad = False
 
         # unfreeze last conv block
+        for param in self.backbone.features[5].parameters():
+            param.requires_grad = True
+
         for param in self.backbone.features[6].parameters():
             param.requires_grad = True
 
