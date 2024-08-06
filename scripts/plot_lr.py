@@ -5,7 +5,7 @@ model = torch.nn.Linear(2, 1)
 optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
     optimizer,
-    T_0=626*2,
+    T_0=781*2,
     T_mult=2,
     eta_min=1e-6,
     last_epoch=-1
@@ -14,7 +14,7 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
 lrs = []
 steps = 0
 for epoch in range(62):
-    for step in range(626):
+    for step in range(781):
         steps += 1
         optimizer.step()
         lrs.append(optimizer.param_groups[0]["lr"])
