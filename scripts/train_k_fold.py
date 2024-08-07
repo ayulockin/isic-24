@@ -81,6 +81,8 @@ for idx, (train_idx, val_idx) in enumerate(
     train_metadata_df.loc[val_idx, "fold"] = idx
 
 train_metadata_df = train_metadata_df[["isic_id", "target", "fold"]]
+# TODO: random name so that it doesn't overwrite
+train_metadata_df.to_csv("../data/stratified_4_fold.csv", index=False)
 
 
 # dataset
